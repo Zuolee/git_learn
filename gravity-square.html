@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>方形引力场吸入小球</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at center, #1a1d22 0%, #090a0d 65%, #000 100%);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      color: #dfe6ef;
+    }
+
+    .wrap {
+      width: min(96vw, 1200px);
+      display: grid;
+      gap: 12px;
+      justify-items: center;
+    }
+
+    .desc {
+      text-align: center;
+      max-width: 900px;
+      line-height: 1.4;
+      font-size: 14px;
+      opacity: 0.85;
+      margin: 0;
+    }
+
+    canvas {
+      width: min(96vw, 1100px);
+      height: min(calc(96vw * 0.62), 680px);
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="desc">
+      屏幕边缘持续生成黑色小球，小球进入方形引力场后会同时受到：① 指向中心的引力加速度；② 逆时针切向推进速度（略小于稳定绕圈速度），从而以螺旋轨迹被吸入方形。
+    </p>
+    <canvas id="scene" width="1100" height="680" aria-label="引力场演示"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+
+    const center = { x: canvas.width / 2, y: canvas.height / 2 };
+    const square = {
+      w: 768,
+      h: 168,
+      get left() { return center.x - this.w / 2; },
+      get top() { return center.y - this.h / 2; },
+      get right() { return center.x + this.w / 2; },
+      get bottom() { return center.y + this.h / 2; }
+    };
+
+    const gravityFieldRadius = 300;
+    const spawnInterval = 90;
+    const particles = [];
+    let lastSpawn = 0;
+
+    function rand(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function spawnParticle() {
+      const side = Math.floor(Math.random() * 4);
+      const margin = 20;
+      let x = 0;
+      let y = 0;
+
+      if (side === 0) {
+        x = rand(0, canvas.width);
+        y = -margin;
+      } else if (side === 1) {
+        x = canvas.width + margin;
+        y = rand(0, canvas.height);
+      } else if (side === 2) {
+        x = rand(0, canvas.width);
+        y = canvas.height + margin;
+      } else {
+        x = -margin;
+        y = rand(0, canvas.height);
+      }
+
+      const dx = center.x - x;
+      const dy = center.y - y;
+      const dist = Math.hypot(dx, dy) || 1;
+
+      const speed = rand(1.3, 2.5);
+      const vx = (dx / dist) * speed;
+      const vy = (dy / dist) * speed;
+
+      particles.push({
+        x,
+        y,
+        vx,
+        vy,
+        r: rand(2.5, 6.5)
+      });
+    }
+
+    function inSquare(p) {
+      return p.x >= square.left && p.x <= square.right && p.y >= square.top && p.y <= square.bottom;
+    }
+
+    function outsideScreen(p) {
+      const margin = 80;
+      return p.x < -margin || p.x > canvas.width + margin || p.y < -margin || p.y > canvas.height + margin;
+    }
+
+    function updateParticle(p, dt) {
+      const dx = center.x - p.x;
+      const dy = center.y - p.y;
+      const d = Math.hypot(dx, dy) || 0.0001;
+
+      if (d < gravityFieldRadius) {
+        const ux = dx / d;
+        const uy = dy / d;
+
+        // ① 指向方形中心的引力加速度
+        const pull = 34 / Math.max(d * 0.55, 20);
+        p.vx += ux * pull * dt;
+        p.vy += uy * pull * dt;
+
+        // ② 逆时针切向速度 x：略小于稳定绕圈所需速度 y
+        // y 近似取 sqrt(a * r)，x 取 0.9y，形成缓慢内旋
+        const radialAcc = pull;
+        const yStable = Math.sqrt(radialAcc * Math.max(d, 1));
+        const xTangential = yStable * 0.9;
+
+        // 逆时针切向单位向量 = (-uy, ux)
+        const tx = -uy;
+        const ty = ux;
+
+        // 以“速度目标趋近”方式注入切向量，避免突变
+        const tangentCurrent = p.vx * tx + p.vy * ty;
+        const tangentDelta = (xTangential - tangentCurrent) * 0.12;
+        p.vx += tx * tangentDelta;
+        p.vy += ty * tangentDelta;
+      }
+
+      // 轻微阻尼，避免无限加速
+      p.vx *= 0.998;
+      p.vy *= 0.998;
+
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 引力场可视化
+      const g = ctx.createRadialGradient(center.x, center.y, square.h * 0.4, center.x, center.y, gravityFieldRadius);
+      g.addColorStop(0, 'rgba(83, 153, 255, 0.20)');
+      g.addColorStop(0.45, 'rgba(83, 153, 255, 0.08)');
+      g.addColorStop(1, 'rgba(83, 153, 255, 0.0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, gravityFieldRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 方形（768 x 168）
+      ctx.save();
+      ctx.fillStyle = '#e8eef8';
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 2;
+      ctx.fillRect(square.left, square.top, square.w, square.h);
+      ctx.strokeRect(square.left, square.top, square.w, square.h);
+      ctx.restore();
+
+      // 小球
+      ctx.fillStyle = '#020202';
+      for (const p of particles) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    let previous = performance.now();
+
+    function tick(now) {
+      const dt = Math.min((now - previous) / 1000, 0.04);
+      previous = now;
+
+      if (now - lastSpawn > spawnInterval) {
+        spawnParticle();
+        lastSpawn = now;
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        updateParticle(p, dt);
+
+        if (inSquare(p) || outsideScreen(p)) {
+          particles.splice(i, 1);
+        }
+      }
+
+      draw();
+      requestAnimationFrame(tick);
+    }
+
+    // 预热一些粒子
+    for (let i = 0; i < 30; i++) spawnParticle();
+
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
